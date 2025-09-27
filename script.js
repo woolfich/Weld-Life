@@ -1,4 +1,4 @@
-import { openDatabase, addData, getAllData, updateData, deleteData, getData, OBJECT_STORES } from '/indexeddb.js';
+import { openDatabase, addData, getAllData, updateData, deleteData, getData, OBJECT_STORES } from './indexeddb.js';
 
 let db; // Глобальная переменная для IndexedDB
 

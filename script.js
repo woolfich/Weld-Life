@@ -1,13 +1,167 @@
-import { openDatabase, addData, getAllData, updateData, deleteData, getData, OBJECT_STORES } from './indexeddb.js';
+import { openDatabase, addData, getAllData, updateData, deleteData, getData, OBJECT_STORES } from '/indexeddb.js';
 
 let db; // Глобальная переменная для IndexedDB
 
 const appDiv = document.getElementById('app');
 
+// Функция для экспорта данных в JSON
+async function exportData() {
+  try {
+    const welderRecords = await getAllData(OBJECT_STORES.WELDER_RECORDS);
+    const operationHistory = await getAllData(OBJECT_STORES.OPERATION_HISTORY);
+    const welders = await getAllData(OBJECT_STORES.WELDERS);
+    const products = await getAllData(OBJECT_STORES.PRODUCTS);
+
+    const data = {
+      welders: welders,
+      products: products,
+      welderRecords: welderRecords,
+      operationHistory: operationHistory
+    };
+
+    const jsonString = JSON.stringify(data, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'weld-life-data.json';
+    a.click();
+    URL.revokeObjectURL(url);
+
+    alert('Данные успешно экспортированы в weld-life-data.json!');
+  } catch (error) {
+    console.error('Ошибка при экспорте данных:', error);
+    alert('Ошибка при экспорте данных. Проверьте консоль для деталей.');
+  }
+}
+
+// Функция для импорта данных из JSON
+async function importData(event) {
+  const file = event.target.files[0];
+  if (!file) {
+    alert('Пожалуйста, выберите файл.');
+    return;
+  }
+
+  if (!file.name.endsWith('.json')) {
+    alert('Пожалуйста, выберите файл в формате JSON.');
+    return;
+  }
+
+  try {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const data = JSON.parse(e.target.result);
+
+        // Валидация данных
+        if (!data.welders || !Array.isArray(data.welders) ||
+            !data.products || !Array.isArray(data.products) ||
+            !data.welderRecords || !Array.isArray(data.welderRecords) ||
+            !data.operationHistory || !Array.isArray(data.operationHistory)) {
+          alert('Неверный формат JSON-файла. Ожидаются массивы welders, products, welderRecords и operationHistory.');
+          return;
+        }
+
+        // Проверка структуры записей
+        const isValidWelderRecords = data.welderRecords.every(record =>
+          record.welderId && record.article && typeof record.quantity === 'number' && record.monthYear
+        );
+        const isValidOperationHistory = data.operationHistory.every(op =>
+          op.welderId && op.article && typeof op.quantity === 'number' && op.date && op.time && op.monthYear
+        );
+        const isValidWelders = data.welders.every(welder => welder.id && welder.name);
+        const isValidProducts = data.products.every(product => product.id && product.article);
+
+        if (!isValidWelderRecords || !isValidOperationHistory || !isValidWelders || !isValidProducts) {
+          alert('Неверная структура данных в JSON-файле. Проверьте формат.');
+          return;
+        }
+
+        // Очистка текущих данных
+        const transaction = db.transaction([OBJECT_STORES.WELDERS, OBJECT_STORES.PRODUCTS, OBJECT_STORES.WELDER_RECORDS, OBJECT_STORES.OPERATION_HISTORY], 'readwrite');
+        const welderStore = transaction.objectStore(OBJECT_STORES.WELDERS);
+        const productStore = transaction.objectStore(OBJECT_STORES.PRODUCTS);
+        const welderRecordsStore = transaction.objectStore(OBJECT_STORES.WELDER_RECORDS);
+        const operationHistoryStore = transaction.objectStore(OBJECT_STORES.OPERATION_HISTORY);
+
+        // Очистка хранилищ
+        await Promise.all([
+          new Promise((resolve, reject) => {
+            const request = welderStore.clear();
+            request.onsuccess = resolve;
+            request.onerror = () => reject(request.error);
+          }),
+          new Promise((resolve, reject) => {
+            const request = productStore.clear();
+            request.onsuccess = resolve;
+            request.onerror = () => reject(request.error);
+          }),
+          new Promise((resolve, reject) => {
+            const request = welderRecordsStore.clear();
+            request.onsuccess = resolve;
+            request.onerror = () => reject(request.error);
+          }),
+          new Promise((resolve, reject) => {
+            const request = operationHistoryStore.clear();
+            request.onsuccess = resolve;
+            request.onerror = () => reject(request.error);
+          })
+        ]);
+
+        // Добавление новых данных
+        for (const welder of data.welders) {
+          await addData(OBJECT_STORES.WELDERS, welder);
+        }
+        for (const product of data.products) {
+          await addData(OBJECT_STORES.PRODUCTS, product);
+        }
+        for (const record of data.welderRecords) {
+          await addData(OBJECT_STORES.WELDER_RECORDS, record);
+        }
+        for (const op of data.operationHistory) {
+          await addData(OBJECT_STORES.OPERATION_HISTORY, op);
+        }
+
+        // Перерендеринг текущего экрана
+        const currentScreen = appDiv.querySelector('.main-screen') ? 'main' :
+                             appDiv.querySelector('.database-screen') ? 'database' :
+                             appDiv.querySelector('.summary-screen') ? 'summary' :
+                             appDiv.querySelector('.welder-card-screen') ? 'welderCard' : 'main';
+
+        if (currentScreen === 'welderCard') {
+          const welderId = data.welderRecords[0]?.welderId || (await getAllData(OBJECT_STORES.WELDERS))[0]?.id;
+          if (welderId) {
+            await renderScreen('welderCard', { welderId });
+          } else {
+            await renderScreen('main');
+          }
+        } else {
+          await renderScreen(currentScreen);
+        }
+
+        alert('Данные успешно импортированы!');
+      } catch (error) {
+        console.error('Ошибка при импорте данных:', error);
+        alert('Ошибка при импорте данных. Проверьте консоль для деталей.');
+      }
+    };
+    reader.readAsText(file);
+  } catch (error) {
+    console.error('Ошибка при чтении файла:', error);
+    alert('Ошибка при чтении файла. Проверьте консоль.');
+  }
+}
+
 // Функция для отображения главного экрана
 async function renderMainScreen() {
     appDiv.innerHTML = `
     <div class="main-screen">
+        <div class="data-controls">
+            <button id="exportDataBtn">Экспорт</button>
+            <label for="importDataInput" class="import-btn">Импорт</label>
+            <input type="file" id="importDataInput" accept=".json" style="display: none;">
+        </div>
         <h2>Список сварщиков</h2>
         <div class="add-welder-section">
             <input type="text" id="newWelderName" placeholder="Введите фамилию сварщика">
@@ -25,6 +179,8 @@ async function renderMainScreen() {
     const newWelderNameInput = document.getElementById('newWelderName');
     const goToDbBtn = document.getElementById('goToDbBtn');
     const goToSummaryBtn = document.getElementById('goToSummaryBtn');
+    const exportDataBtn = document.getElementById('exportDataBtn');
+    const importDataInput = document.getElementById('importDataInput');
 
     // Загрузка и отображение сварщиков
     await loadWelders();
@@ -47,6 +203,10 @@ async function renderMainScreen() {
     goToSummaryBtn.addEventListener('click', () => {
         renderScreen('summary');
     });
+
+    exportDataBtn.addEventListener('click', exportData);
+
+    importDataInput.addEventListener('change', importData);
 }
 
 // Функция для отображения экрана Базы данных
